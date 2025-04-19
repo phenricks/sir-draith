@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sir-draith-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./configs:/app/configs
+    depends_on:
+      - mongodb
+    networks:
+      - sir-draith-network
+
+  mongodb:
+    image: mongo:latest
+    container_name: sirdraith_mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: sirdraith
+      MONGO_INITDB_ROOT_PASSWORD: sirdraith123
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - sir-draith-network
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: sir-draith-mongo-express
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER:-root}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-example}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER:-root}:${MONGO_ROOT_PASSWORD:-example}@mongodb:27017/
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mongodb
+    networks:
+      - sir-draith-network
+
+volumes:
+  mongodb_data:
+    name: sir-draith-mongodb-data
+
+networks:
+  sir-draith-network:
+    name: sir-draith-network
+    driver: bridge 

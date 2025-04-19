@@ -1,0 +1,33 @@
+# Configuração do Bot
+bot:
+  token: "your-discord-bot-token"
+  prefix: "!"
+  status: "Protegendo o Reino"
+
+# Configuração do MongoDB
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "sir_draith"
+  options:
+    retryWrites: true
+    w: "majority"
+
+# Configuração de Logging
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "json" # json, console
+  output: "stdout" # stdout, file
+
+# Configurações de Desenvolvimento
+development:
+  debug: false
+  hot_reload: false
+
+# Configurações do Servidor
+server:
+  welcome_channel: "bem-vindos"
+  log_channel: "logs"
+  admin_roles:
+    - "Rei"
+    - "Rainha"
+    - "Conselheiro" 
