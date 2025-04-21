@@ -8,6 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"sirdraith/internal/domain/repository"
+	"sirdraith/internal/domain/services"
 	"sirdraith/internal/infrastructure/discord/commands"
 	"sirdraith/internal/infrastructure/discord/events"
 	"sirdraith/internal/infrastructure/mongodb"
@@ -15,10 +16,11 @@ import (
 
 // Client representa o cliente Discord do bot
 type Client struct {
-	session         *discordgo.Session
-	configRepo      repository.ConfigRepository
-	commandRegistry *commands.CommandRegistry
-	eventManager    *events.EventManager
+	session          *discordgo.Session
+	configRepo       repository.ConfigRepository
+	commandRegistry  *commands.CommandRegistry
+	eventManager     *events.EventManager
+	characterService *services.CharacterService
 }
 
 // NewClient cria uma nova instância do cliente Discord
@@ -37,39 +39,51 @@ func NewClient(token string, db *mongo.Database) (*Client, error) {
 		return nil, fmt.Errorf("erro ao criar sessão do Discord: %w", err)
 	}
 
+	// Inicializa repositórios
 	configRepo := mongodb.NewConfigRepository(db)
-	registry := commands.NewCommandRegistry("!", configRepo)
-	eventManager := events.NewEventManager(configRepo)
+	characterRepo := mongodb.NewCharacterRepository(db)
 
-	// Registra os comandos
-	registerCommands(registry)
+	// Inicializa serviços
+	characterService := services.NewCharacterService(characterRepo)
+
+	// Inicializa o registro de comandos e gerenciador de eventos
+	registry := commands.NewCommandRegistry(session, "!", configRepo, characterService, db)
+	eventManager := events.NewEventManager(session, configRepo, registry)
 
 	client := &Client{
-		session:         session,
-		configRepo:      configRepo,
-		commandRegistry: registry,
-		eventManager:    eventManager,
+		session:          session,
+		configRepo:       configRepo,
+		commandRegistry:  registry,
+		eventManager:     eventManager,
+		characterService: characterService,
 	}
+
+	// Registra os comandos
+	client.registerCommands()
 
 	return client, nil
 }
 
 // registerCommands registra todos os comandos disponíveis
-func registerCommands(registry *commands.CommandRegistry) {
+func (c *Client) registerCommands() {
 	// Registra comandos básicos
 	for _, cmd := range commands.BasicCommands() {
-		registry.RegisterCommand(cmd)
+		c.commandRegistry.RegisterCommand(cmd)
 	}
 
 	// Registra comandos administrativos
 	for _, cmd := range commands.AdminCommands() {
-		registry.RegisterCommand(cmd)
+		c.commandRegistry.RegisterCommand(cmd)
 	}
 
 	// Registra comandos utilitários
 	for _, cmd := range commands.UtilityCommands() {
-		registry.RegisterCommand(cmd)
+		c.commandRegistry.RegisterCommand(cmd)
 	}
+
+	// Registra comandos de personagem
+	characterCommands := commands.NewCharacterCommands(c.characterService)
+	characterCommands.Register(c.commandRegistry)
 }
 
 // Connect estabelece a conexão com o Discord
@@ -98,6 +112,13 @@ func (c *Client) Connect() error {
 		}
 	})
 
+	// Registra o handler de interações
+	c.session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if err := c.commandRegistry.HandleInteraction(i); err != nil {
+			log.Printf("Erro ao processar interação: %v\n", err)
+		}
+	})
+
 	// Define intents necessários
 	c.session.Identify.Intents = discordgo.IntentsAll
 
@@ -116,4 +137,4 @@ func (c *Client) Disconnect() error {
 		return fmt.Errorf("erro ao desconectar do Discord: %w", err)
 	}
 	return nil
-} 
+}

@@ -12,4 +12,7 @@ type ConfigRepository interface {
 
 	// EnsureGuildConfig garante que existe uma configuração para o servidor
 	EnsureGuildConfig(guildID string) (*model.GuildConfig, error)
-} 
+
+	// UpdateGuildConfig atualiza a configuração completa de um servidor
+	UpdateGuildConfig(guildID string, config *model.GuildConfig) error
+}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"sirdraith/internal/domain/gamedata"
+
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -20,15 +22,15 @@ type Character struct {
 	Gold        int                `bson:"gold"`            // Moedas de ouro
 
 	// Atributos base
-	Attributes Attributes `bson:"attributes"`
+	Attributes gamedata.Attributes `bson:"attributes"`
 
 	// Características medievais
-	Class      string   `bson:"class"`      // Classe (Cavaleiro, Mago, etc)
-	Background string   `bson:"background"` // Origem (Nobre, Plebeu, etc)
-	Skills     []string `bson:"skills"`     // Habilidades especiais
-	Equipment  []Item   `bson:"equipment"`  // Itens equipados
-	Inventory  []Item   `bson:"inventory"`  // Inventário completo
-	Status     []string `bson:"status"`     // Estados atuais (Ferido, Envenenado, etc)
+	Class      gamedata.CharacterClass     `bson:"class"`      // Classe (Cavaleiro, Mago, etc)
+	Background string                      `bson:"background"` // Origem (Nobre, Plebeu, etc)
+	Skills     []gamedata.SkillProficiency `bson:"skills"`     // Perícias do personagem
+	Equipment  []Item                      `bson:"equipment"`  // Itens equipados
+	Inventory  []Item                      `bson:"inventory"`  // Inventário completo
+	Status     []string                    `bson:"status"`     // Estados atuais (Ferido, Envenenado, etc)
 
 	// Estatísticas de combate
 	Combat Combat `bson:"combat"`
@@ -41,26 +43,19 @@ type Character struct {
 
 // Item representa um item no inventário ou equipado
 type Item struct {
-	ID          string `bson:"_id,omitempty"`
-	Name        string `bson:"name"`        // Nome do item
-	Description string `bson:"description"` // Descrição
-	Quantity    int    `bson:"quantity"`    // Quantidade
-	Type        string `bson:"type"`        // Tipo (Arma, Armadura, Consumível, etc)
-	Value       int    `bson:"value"`       // Valor em moedas de ouro
-	Effects     string `bson:"effects"`     // Efeitos especiais
-	Slot        string `bson:"slot"`        // Slot de equipamento (Mão Principal, Armadura, etc)
-	IsEquipped  bool   `bson:"is_equipped"` // Se está equipado
-	Rarity      string `bson:"rarity"`      // Raridade do item
-}
-
-// Attributes representa os atributos base do personagem
-type Attributes struct {
-	Strength     int `bson:"strength"`     // Força
-	Dexterity    int `bson:"dexterity"`    // Destreza
-	Constitution int `bson:"constitution"` // Constituição
-	Intelligence int `bson:"intelligence"` // Inteligência
-	Wisdom       int `bson:"wisdom"`       // Sabedoria
-	Charisma     int `bson:"charisma"`     // Carisma
+	ID              string                    `bson:"_id,omitempty"`
+	Name            string                    `bson:"name"`             // Nome do item
+	Description     string                    `bson:"description"`      // Descrição
+	Quantity        int                       `bson:"quantity"`         // Quantidade
+	Type            gamedata.ItemType         `bson:"type"`             // Tipo (Arma, Armadura, Consumível, etc)
+	Value           int                       `bson:"value"`            // Valor em moedas de ouro
+	Effects         string                    `bson:"effects"`          // Efeitos especiais
+	Slot            gamedata.EquipmentSlot    `bson:"slot"`             // Slot de equipamento
+	IsEquipped      bool                      `bson:"is_equipped"`      // Se está equipado
+	Rarity          gamedata.ItemRarity       `bson:"rarity"`           // Raridade do item
+	Stats           gamedata.ItemStats        `bson:"stats"`            // Estatísticas do item
+	RequiredLevel   int                       `bson:"required_level"`   // Nível mínimo para usar
+	RequiredClasses []gamedata.CharacterClass `bson:"required_classes"` // Classes que podem usar
 }
 
 // Combat representa as estatísticas de combate do personagem
@@ -73,38 +68,22 @@ type Combat struct {
 }
 
 // NewCharacter cria um novo personagem com valores padrão
-func NewCharacter(userID, guildID, name string) *Character {
+func NewCharacter(userID, guildID, name, class string) *Character {
 	now := time.Now()
 	char := &Character{
 		UserID:     userID,
 		GuildID:    guildID,
 		Name:       name,
+		Class:      gamedata.CharacterClass(class),
 		Level:      1,
 		Experience: 0,
-		Gold:       100, // Moedas iniciais
+		Gold:       gamedata.StartingGold,
+		Inventory:  make([]Item, 0),
+		IsActive:   true,
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		IsActive:   true,
-		Skills:     make([]string, 0),
-		Equipment:  make([]Item, 0),
-		Inventory:  make([]Item, 0),
-		Status:     make([]string, 0),
 	}
-
-	// Atributos base iniciais
-	char.Attributes.Strength = 10
-	char.Attributes.Dexterity = 10
-	char.Attributes.Constitution = 10
-	char.Attributes.Intelligence = 10
-	char.Attributes.Wisdom = 10
-	char.Attributes.Charisma = 10
-
-	// Configuração inicial de combate
-	char.Combat.MaxHealth = 10 + char.getConstitutionModifier()
-	char.Combat.Health = char.Combat.MaxHealth
-	char.Combat.Armor = 10 + char.getDexterityModifier()
-	char.Combat.Initiative = char.getDexterityModifier()
-
+	char.updateCombatConfig()
 	return char
 }
 
@@ -139,57 +118,76 @@ func (c *Character) getCharismaModifier() int {
 }
 
 // AddExperience adiciona experiência e verifica level up
-func (c *Character) AddExperience(exp int) bool {
-	c.Experience += exp
-	leveledUp := false
-
-	// Verifica level up (100 exp por nível)
-	for c.Experience >= c.getNextLevelExperience() {
-		c.levelUp()
-		leveledUp = true
+func (c *Character) AddExperience(exp int) error {
+	if exp < 0 {
+		return fmt.Errorf("experiência inválida")
 	}
 
-	return leveledUp
+	c.Experience += exp
+	for {
+		nextLevelExp := c.getNextLevelExperience()
+		if nextLevelExp == -1 || c.Experience < nextLevelExp {
+			break
+		}
+		if err := c.levelUp(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // getNextLevelExperience retorna a experiência necessária para o próximo nível
 func (c *Character) getNextLevelExperience() int {
-	return c.Level * 100
+	if c.Level >= gamedata.MaxLevel {
+		return -1 // Indica que não há próximo nível
+	}
+	return gamedata.CalculateExpForLevel(c.Level + 1)
 }
 
 // levelUp aumenta o nível do personagem e atualiza atributos
-func (c *Character) levelUp() {
-	c.Level++
-
-	// Aumenta pontos de vida máximos
-	healthIncrease := 5 + c.getConstitutionModifier()
-	if healthIncrease < 1 {
-		healthIncrease = 1
+func (c *Character) levelUp() error {
+	if c.Level >= gamedata.MaxLevel {
+		return fmt.Errorf("nível máximo atingido")
 	}
-	c.Combat.MaxHealth += healthIncrease
-	c.Combat.Health = c.Combat.MaxHealth
+	c.Level++
+	c.updateCombatConfig()
+	return nil
+}
 
-	// Atualiza outras estatísticas baseadas em nível
+func (c *Character) updateCombatConfig() {
+	c.Combat.MaxHealth = gamedata.CalculateMaxHealth(c.Level, c.Attributes.Constitution)
+	c.Combat.Health = c.Combat.MaxHealth
+	c.Combat.Armor = 10 + c.getDexterityModifier()
 	c.Combat.Initiative = c.getDexterityModifier() + (c.Level / 4)
-	c.Combat.Armor = 10 + c.getDexterityModifier() + (c.Level / 5)
 }
 
 // AddItem adiciona um item ao inventário
 func (c *Character) AddItem(item Item) error {
-	// Procura se o item já existe no inventário
+	if len(c.Inventory) >= gamedata.MaxInventorySize {
+		return fmt.Errorf("inventário cheio (limite de %d itens)", gamedata.MaxInventorySize)
+	}
+
 	for i, existingItem := range c.Inventory {
 		if existingItem.Name == item.Name && !existingItem.IsEquipped {
-			c.Inventory[i].Quantity += item.Quantity
+			newQuantity := existingItem.Quantity + item.Quantity
+			if newQuantity > gamedata.MaxItemQuantity {
+				return fmt.Errorf("quantidade total excederia o limite de %d", gamedata.MaxItemQuantity)
+			}
+			c.Inventory[i].Quantity = newQuantity
 			return nil
 		}
 	}
-	// Se não existe, adiciona novo item
+
 	c.Inventory = append(c.Inventory, item)
 	return nil
 }
 
 // RemoveItem remove uma quantidade de um item do inventário
 func (c *Character) RemoveItem(itemName string, quantity int) error {
+	if quantity <= 0 {
+		return fmt.Errorf("quantidade deve ser maior que zero")
+	}
+
 	for i, item := range c.Inventory {
 		if item.Name == itemName && !item.IsEquipped {
 			if item.Quantity < quantity {
@@ -208,7 +206,10 @@ func (c *Character) RemoveItem(itemName string, quantity int) error {
 
 // EquipItem equipa um item do inventário
 func (c *Character) EquipItem(itemName string) error {
-	// Verifica se o item existe no inventário
+	if len(c.Equipment) >= gamedata.MaxEquipmentSize {
+		return fmt.Errorf("limite de equipamentos atingido (%d itens)", gamedata.MaxEquipmentSize)
+	}
+
 	var itemToEquip *Item
 	var itemIndex int
 	for i, item := range c.Inventory {
@@ -223,21 +224,12 @@ func (c *Character) EquipItem(itemName string) error {
 		return fmt.Errorf("item não encontrado no inventário ou já está equipado")
 	}
 
-	// Verifica se já existe um item equipado no mesmo slot
-	for i, equippedItem := range c.Equipment {
-		if equippedItem.Slot == itemToEquip.Slot {
-			// Desequipa o item atual
-			equippedItem.IsEquipped = false
-			c.Inventory = append(c.Inventory, equippedItem)
-			c.Equipment = append(c.Equipment[:i], c.Equipment[i+1:]...)
-			break
-		}
+	if err := gamedata.ValidateEquipment(c.Level, c.Class, itemToEquip.Type, itemToEquip.RequiredLevel, itemToEquip.RequiredClasses); err != nil {
+		return fmt.Errorf("não é possível equipar o item: %w", err)
 	}
 
-	// Equipa o novo item
 	itemToEquip.IsEquipped = true
 	c.Equipment = append(c.Equipment, *itemToEquip)
-	// Remove do inventário
 	c.Inventory = append(c.Inventory[:itemIndex], c.Inventory[itemIndex+1:]...)
 
 	return nil
@@ -294,4 +286,91 @@ func (c *Character) Heal(amount int) {
 	if c.Combat.Health > c.Combat.MaxHealth {
 		c.Combat.Health = c.Combat.MaxHealth
 	}
+}
+
+// CalculateMaxHealth calcula a vida máxima do personagem
+func (c *Character) CalculateMaxHealth() int {
+	return gamedata.CalculateMaxHealth(c.Level, c.Attributes.Constitution)
+}
+
+// InitializeSkills inicializa as perícias do personagem com base na classe
+func (c *Character) InitializeSkills() {
+	// Obter perícias disponíveis para a classe
+	classSkills := gamedata.GetSkillsForClass(c.Class)
+
+	// Inicializar slice de perícias
+	c.Skills = make([]gamedata.SkillProficiency, 0, len(classSkills))
+
+	// Adicionar cada perícia com proficiência
+	for _, skill := range classSkills {
+		c.Skills = append(c.Skills, gamedata.SkillProficiency{
+			Skill:        skill,
+			IsProficient: true,
+		})
+	}
+}
+
+// GetSkillModifier retorna o modificador total de uma perícia
+func (c *Character) GetSkillModifier(skill gamedata.Skill) int {
+	// Encontrar a proficiência da perícia
+	var proficiency *gamedata.SkillProficiency
+	for i, p := range c.Skills {
+		if p.Skill == skill {
+			proficiency = &c.Skills[i]
+			break
+		}
+	}
+
+	return gamedata.CalculateSkillModifier(skill, &c.Attributes, proficiency, c.Level)
+}
+
+// AddSkillProficiency adiciona proficiência em uma perícia
+func (c *Character) AddSkillProficiency(skill gamedata.Skill) error {
+	// Verificar se a perícia pode ser usada pela classe
+	if !gamedata.ValidateSkillProficiency(c.Class, skill) {
+		return fmt.Errorf("a classe %s não pode ter proficiência em %s", c.Class, skill)
+	}
+
+	// Verificar se já tem a perícia
+	for i, p := range c.Skills {
+		if p.Skill == skill {
+			c.Skills[i].IsProficient = true
+			return nil
+		}
+	}
+
+	// Adicionar nova perícia
+	c.Skills = append(c.Skills, gamedata.SkillProficiency{
+		Skill:        skill,
+		IsProficient: true,
+	})
+	return nil
+}
+
+// RemoveSkillProficiency remove a proficiência em uma perícia
+func (c *Character) RemoveSkillProficiency(skill gamedata.Skill) {
+	for i, p := range c.Skills {
+		if p.Skill == skill {
+			c.Skills[i].IsProficient = false
+			break
+		}
+	}
+}
+
+// AddSkillBonus adiciona um bônus a uma perícia
+func (c *Character) AddSkillBonus(skill gamedata.Skill, bonus int) error {
+	// Encontrar a perícia
+	for i, p := range c.Skills {
+		if p.Skill == skill {
+			c.Skills[i].Bonus += bonus
+			return nil
+		}
+	}
+
+	// Se não encontrou, adiciona nova perícia com o bônus
+	c.Skills = append(c.Skills, gamedata.SkillProficiency{
+		Skill: skill,
+		Bonus: bonus,
+	})
+	return nil
 }

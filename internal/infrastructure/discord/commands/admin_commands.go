@@ -15,6 +15,7 @@ func AdminCommands() []*Command {
 		KickCommand(),
 		BanCommand(),
 		UnbanCommand(),
+		ChannelsCommand(),
 	}
 }
 
@@ -231,4 +232,123 @@ func UnbanCommand() *Command {
 			return err
 		},
 	}
-} 
+}
+
+// ChannelsCommand cria o comando para configurar canais especiais
+func ChannelsCommand() *Command {
+	return &Command{
+		Name:        "channels",
+		Aliases:     []string{"canais", "canal"},
+		Description: "Configura os canais especiais do servidor (boas-vindas e despedida)",
+		Usage:       "channels <welcome/goodbye> <#canal>",
+		Category:    "Admin",
+		Handler: func(ctx *CommandContext) error {
+			// Verifica permissões
+			perms, err := ctx.Session.UserChannelPermissions(ctx.Message.Author.ID, ctx.Message.ChannelID)
+			if err != nil {
+				return fmt.Errorf("erro ao verificar permissões: %w", err)
+			}
+
+			if perms&discordgo.PermissionAdministrator == 0 {
+				return sendErrorEmbed(ctx, "Você não tem permissão para usar este comando.")
+			}
+
+			config, err := ctx.Registry.configRepository.GetGuildConfig(ctx.Message.GuildID)
+			if err != nil {
+				return sendErrorEmbed(ctx, "Erro ao buscar configuração do servidor.")
+			}
+
+			if len(ctx.Args) == 0 {
+				embed := &discordgo.MessageEmbed{
+					Title: "Configuração de Canais",
+					Description: fmt.Sprintf("Canal de boas-vindas: %s\nCanal de despedida: %s",
+						channelMention(config.WelcomeChannel),
+						channelMention(config.GoodbyeChannel)),
+					Color: 0x00ff00,
+				}
+				_, err := ctx.Session.ChannelMessageSendEmbed(ctx.Message.ChannelID, embed)
+				return err
+			}
+
+			if len(ctx.Args) != 2 {
+				return sendErrorEmbed(ctx, "Use: !channels <welcome|goodbye> #canal")
+			}
+
+			channelType := strings.ToLower(ctx.Args[0])
+			if channelType != "welcome" && channelType != "goodbye" {
+				return sendErrorEmbed(ctx, "Tipo de canal inválido. Use 'welcome' ou 'goodbye'.")
+			}
+
+			channelID := extractChannelID(ctx.Args[1])
+			if channelID == "" {
+				return sendErrorEmbed(ctx, "Canal inválido. Mencione um canal usando #.")
+			}
+
+			channel, err := ctx.Session.Channel(channelID)
+			if err != nil {
+				return sendErrorEmbed(ctx, "Canal não encontrado.")
+			}
+
+			if channel.GuildID != ctx.Message.GuildID {
+				return sendErrorEmbed(ctx, "Este canal não pertence a este servidor.")
+			}
+
+			switch channelType {
+			case "welcome":
+				config.WelcomeChannel = channelID
+			case "goodbye":
+				config.GoodbyeChannel = channelID
+			}
+
+			err = ctx.Registry.configRepository.UpdateGuildConfig(ctx.Message.GuildID, config)
+			if err != nil {
+				return sendErrorEmbed(ctx, "Erro ao atualizar configuração do servidor.")
+			}
+
+			embed := &discordgo.MessageEmbed{
+				Title: "Canal Configurado",
+				Description: fmt.Sprintf("Canal de %s definido como %s",
+					channelTypeInPortuguese(channelType),
+					channel.Mention()),
+				Color: 0x00ff00,
+			}
+			_, err = ctx.Session.ChannelMessageSendEmbed(ctx.Message.ChannelID, embed)
+			return err
+		},
+	}
+}
+
+func sendErrorEmbed(ctx *CommandContext, message string) error {
+	embed := &discordgo.MessageEmbed{
+		Title:       "Erro",
+		Description: message,
+		Color:       0xff0000,
+	}
+	_, err := ctx.Session.ChannelMessageSendEmbed(ctx.Message.ChannelID, embed)
+	return err
+}
+
+func channelMention(channelID string) string {
+	if channelID == "" {
+		return "Não configurado"
+	}
+	return fmt.Sprintf("<#%s>", channelID)
+}
+
+func extractChannelID(mention string) string {
+	if !strings.HasPrefix(mention, "<#") || !strings.HasSuffix(mention, ">") {
+		return ""
+	}
+	return strings.Trim(mention, "<#>")
+}
+
+func channelTypeInPortuguese(channelType string) string {
+	switch channelType {
+	case "welcome":
+		return "boas-vindas"
+	case "goodbye":
+		return "despedida"
+	default:
+		return channelType
+	}
+}

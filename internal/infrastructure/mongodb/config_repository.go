@@ -82,4 +82,29 @@ func (r *MongoConfigRepository) EnsureGuildConfig(guildID string) (*model.GuildC
 	}
 
 	return config, nil
-} 
+}
+
+// UpdateGuildConfig atualiza a configuração completa de um servidor
+func (r *MongoConfigRepository) UpdateGuildConfig(guildID string, config *model.GuildConfig) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	config.UpdatedAt = time.Now()
+
+	update := bson.M{
+		"$set": bson.M{
+			"prefix":          config.Prefix,
+			"welcome_channel": config.WelcomeChannel,
+			"goodbye_channel": config.GoodbyeChannel,
+			"updated_at":      config.UpdatedAt,
+		},
+	}
+
+	opts := options.Update().SetUpsert(true)
+	_, err := r.collection().UpdateOne(ctx, bson.M{"_id": guildID}, update, opts)
+	if err != nil {
+		return fmt.Errorf("erro ao atualizar configuração do servidor: %w", err)
+	}
+
+	return nil
+}

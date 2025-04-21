@@ -2,8 +2,13 @@ package commands
 
 import (
 	"fmt"
-	"github.com/bwmarrin/discordgo"
+	"log"
 	"sirdraith/internal/domain/repository"
+	"sirdraith/internal/domain/services"
+	"sirdraith/internal/infrastructure/mongodb/repositories"
+
+	"github.com/bwmarrin/discordgo"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // Command representa um comando do bot
@@ -25,6 +30,13 @@ type CommandContext struct {
 	Message  *discordgo.MessageCreate
 	Args     []string
 	Registry *CommandRegistry
+	Command  string
+}
+
+// Reply envia uma resposta simples para o canal
+func (ctx *CommandContext) Reply(message string) error {
+	_, err := ctx.Session.ChannelMessageSend(ctx.Message.ChannelID, message)
+	return err
 }
 
 // CommandRegistry mantém o registro de todos os comandos disponíveis
@@ -32,21 +44,34 @@ type CommandRegistry struct {
 	commands         map[string]*Command
 	defaultPrefix    string
 	configRepository repository.ConfigRepository
+	characterService *services.CharacterService
+	wizards          map[string]*CharacterWizard // Mapa de wizards ativos por userID
+	session          *discordgo.Session
+	db               *mongo.Database // Add MongoDB database field
 }
 
 // NewCommandRegistry cria um novo registro de comandos
-func NewCommandRegistry(defaultPrefix string, configRepo repository.ConfigRepository) *CommandRegistry {
-	return &CommandRegistry{
+func NewCommandRegistry(session *discordgo.Session, defaultPrefix string, configRepo repository.ConfigRepository, characterService *services.CharacterService, db *mongo.Database) *CommandRegistry {
+	registry := &CommandRegistry{
 		commands:         make(map[string]*Command),
 		defaultPrefix:    defaultPrefix,
 		configRepository: configRepo,
+		characterService: characterService,
+		wizards:          make(map[string]*CharacterWizard),
+		session:          session,
+		db:               db,
 	}
+
+	// Registrar comandos
+	registry.RegisterCommands()
+
+	return registry
 }
 
 // RegisterCommand registra um novo comando
 func (r *CommandRegistry) RegisterCommand(cmd *Command) {
 	r.commands[cmd.Name] = cmd
-	
+
 	// Registra aliases
 	for _, alias := range cmd.Aliases {
 		r.commands[alias] = cmd
@@ -94,7 +119,7 @@ func (r *CommandRegistry) GetCommands() map[string]*Command {
 // HandleMessage processa uma mensagem e executa o comando apropriado
 func (r *CommandRegistry) HandleMessage(s *discordgo.Session, m *discordgo.MessageCreate) error {
 	content := m.Content
-	
+
 	// Obtém o prefixo específico do servidor
 	prefix := r.defaultPrefix
 	if m.GuildID != "" {
@@ -129,6 +154,7 @@ func (r *CommandRegistry) HandleMessage(s *discordgo.Session, m *discordgo.Messa
 		Message:  m,
 		Args:     args[1:],
 		Registry: r,
+		Command:  cmdName,
 	}
 
 	// Executa o comando
@@ -164,4 +190,58 @@ func ParseArgs(content string) []string {
 	}
 
 	return args
-} 
+}
+
+// HandleInteraction processa uma interação de componente
+func (r *CommandRegistry) HandleInteraction(i *discordgo.InteractionCreate) error {
+	// Verifica se é uma interação de componente
+	if i.Type != discordgo.InteractionMessageComponent {
+		return nil
+	}
+
+	// Registra a interação para debug
+	log.Printf("Componente acionado: %s por %s", i.MessageComponentData().CustomID, i.Member.User.Username)
+
+	// Busca o wizard ativo para o usuário
+	wizard, exists := r.wizards[i.Member.User.ID]
+	if !exists {
+		return fmt.Errorf("nenhum wizard ativo para este usuário")
+	}
+
+	// Processa a interação no wizard
+	return wizard.HandleInteraction(i)
+}
+
+// RegisterCommands registra todos os comandos disponíveis
+func (r *CommandRegistry) RegisterCommands() {
+	// Registrar comandos de personagem
+	characterCommands := NewCharacterCommands(r.characterService)
+	characterCommands.Register(r)
+
+	// Registrar comandos de perícia
+	skillCommands := NewSkillCommands(r.characterService)
+	skillCommands.Register(r)
+
+	// Registrar comandos de deck
+	deckService := services.NewDeckService(
+		repositories.NewMongoDeckRepository(r.db),
+		repositories.NewMongoCardRepository(r.db),
+	)
+	deckCommands := NewDeckCommands(deckService)
+	deckCommands.Register(r)
+}
+
+// GetWizard retorna o wizard ativo para um usuário
+func (r *CommandRegistry) GetWizard(userID string) *CharacterWizard {
+	return r.wizards[userID]
+}
+
+// SetWizard define o wizard ativo para um usuário
+func (r *CommandRegistry) SetWizard(userID string, wizard *CharacterWizard) {
+	r.wizards[userID] = wizard
+}
+
+// RemoveWizard remove o wizard ativo de um usuário
+func (r *CommandRegistry) RemoveWizard(userID string) {
+	delete(r.wizards, userID)
+}

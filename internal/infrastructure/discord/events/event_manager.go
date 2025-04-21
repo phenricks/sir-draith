@@ -5,23 +5,25 @@ import (
 	"log"
 	"sync"
 
-	"github.com/bwmarrin/discordgo"
 	"sirdraith/internal/domain/repository"
+	"sirdraith/internal/infrastructure/discord/commands"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 // EventType representa o tipo de evento do Discord
 type EventType string
 
 const (
-	EventReady              EventType = "ready"
-	EventGuildCreate        EventType = "guild_create"
-	EventGuildDelete        EventType = "guild_delete"
-	EventGuildMemberAdd     EventType = "guild_member_add"
-	EventGuildMemberRem     EventType = "guild_member_remove"
-	EventMessageCreate      EventType = "message_create"
-	EventMessageDelete      EventType = "message_delete"
-	EventMessageUpdate      EventType = "message_update"
-	EventInteractionCreate  EventType = "interaction_create"
+	EventReady             EventType = "ready"
+	EventGuildCreate       EventType = "guild_create"
+	EventGuildDelete       EventType = "guild_delete"
+	EventGuildMemberAdd    EventType = "guild_member_add"
+	EventGuildMemberRem    EventType = "guild_member_remove"
+	EventMessageCreate     EventType = "message_create"
+	EventMessageDelete     EventType = "message_delete"
+	EventMessageUpdate     EventType = "message_update"
+	EventInteractionCreate EventType = "interaction_create"
 )
 
 // EventHandler é a interface que todos os handlers de eventos devem implementar
@@ -39,16 +41,20 @@ func (f EventHandlerFunc) Handle(s *discordgo.Session, i interface{}) error {
 
 // EventManager gerencia os handlers de eventos do Discord
 type EventManager struct {
-	handlers         map[EventType][]EventHandler
-	configRepository repository.ConfigRepository
+	handlers        map[EventType][]EventHandler
+	configRepo      repository.ConfigRepository
+	commandRegistry *commands.CommandRegistry
+	session         *discordgo.Session
 	mu              sync.RWMutex
 }
 
 // NewEventManager cria uma nova instância do EventManager
-func NewEventManager(configRepo repository.ConfigRepository) *EventManager {
+func NewEventManager(session *discordgo.Session, configRepo repository.ConfigRepository, registry *commands.CommandRegistry) *EventManager {
 	return &EventManager{
-		handlers:         make(map[EventType][]EventHandler),
-		configRepository: configRepo,
+		handlers:        make(map[EventType][]EventHandler),
+		configRepo:      configRepo,
+		commandRegistry: registry,
+		session:         session,
 	}
 }
 
@@ -132,13 +138,13 @@ func WrapHandler(eventType EventType, em *EventManager) interface{} {
 // RegisterDefaultHandlers registra os handlers padrão para os eventos
 func (em *EventManager) RegisterDefaultHandlers() {
 	// Ready Handler
-	em.AddHandler(EventReady, NewReadyHandler())
+	em.AddHandler(EventReady, NewReadyHandler(em.session))
 
 	// Guild Handlers
-	em.AddHandler(EventGuildCreate, NewGuildCreateHandler())
+	em.AddHandler(EventGuildCreate, NewGuildCreateHandler(em.session))
 	em.AddHandler(EventGuildDelete, NewGuildDeleteHandler())
-	em.AddHandler(EventGuildMemberAdd, NewGuildMemberHandler())
-	em.AddHandler(EventGuildMemberRem, NewGuildMemberHandler())
+	em.AddHandler(EventGuildMemberAdd, NewGuildMemberAddHandler(em.configRepo))
+	em.AddHandler(EventGuildMemberRem, NewGuildMemberRemoveHandler(em.configRepo))
 
 	// Message Handlers
 	messageHandler := NewMessageHandler()
@@ -150,4 +156,12 @@ func (em *EventManager) RegisterDefaultHandlers() {
 	em.AddHandler(EventInteractionCreate, NewInteractionCreateHandler())
 
 	log.Println("Handlers de eventos registrados com sucesso!")
-} 
+}
+
+// HandleInteractionCreate processa eventos de interação
+func (em *EventManager) HandleInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	// Processa a interação através do registro de comandos
+	if err := em.commandRegistry.HandleInteraction(i); err != nil {
+		log.Printf("Erro ao processar interação: %v", err)
+	}
+}

@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"sirdraith/internal/domain/entities"
+	"sirdraith/internal/domain/gamedata"
 	"sirdraith/internal/domain/repositories"
 )
 
@@ -29,7 +31,18 @@ func (s *CharacterService) CreateCharacter(ctx context.Context, userID, guildID,
 	}
 
 	// Cria um novo personagem com valores padrão
-	character := entities.NewCharacter(userID, guildID, name)
+	character := &entities.Character{
+		UserID:     userID,
+		GuildID:    guildID,
+		Name:       name,
+		Level:      1,
+		Experience: 0,
+		Gold:       gamedata.StartingGold,
+		Inventory:  make([]entities.Item, 0),
+		IsActive:   true,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
 
 	if err := s.repo.Create(ctx, character); err != nil {
 		return nil, fmt.Errorf("erro ao criar personagem: %w", err)
